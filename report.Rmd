@@ -1,0 +1,108 @@
+Practical Machine Learning Project
+========================================================
+## Summary
+The purpose of this study is to predict the manner in which a set of users performed their exercises using wearable devices. After comparing the different models on the data, using Random Forests resulted in best accuracy. 
+
+## Loading Data and libraries 
+
+```{r}
+library(caret)
+library(parallel)
+library(doParallel)
+#User parallel processing to speed learning
+cl=makeCluster(detectCores())
+registerDoParallel(cl)
+
+training = read.csv("pml-training.csv")
+testing = read.csv("pml-testing.csv")
+```
+
+## Data Cleaning and Pre-Processing
+After examining the data, there are several steps needed to clean the data. The exact same pre-processing is done on both the training and testing datasets. These steps include:
+
+* Removing irrelavant features (the index x, the user name, the raw time stamps, new window and num window)
+* Convert all features (except classe) to numeric
+* Many features have null values. Hence, we need to remove all features that have more than 90% of NULL values. Note that when removing the features from testing, we used the same features with more than 90% NA in training
+
+```{r warning=FALSE}
+#Remove irrelevant features
+training = training[,-c(1:7)]
+#Make classe the first feature for convenience
+training = training[,c(153,1:152)]
+#convert to numeric
+training[,2:153] =as.data.frame(sapply(training[,-1],function(x){as.numeric(as.character(x))}))
+#Remove NA values
+PercNull<- colSums(1*is.na(training))/dim(training)[1]
+training = training[,PercNull<0.9]
+
+#Perform the exact same steps on testing
+testing = testing[,-c(1:7)]
+testing = testing[,c(153,1:152)]
+testing[,2:153] =as.data.frame(sapply(testing[,-1],function(x){as.numeric(as.character(x))}))
+testing = testing[,PercNull<0.9]
+```
+
+## Data Splitting and more pre-processing
+To evaluate the performance of the models, we need to split the training data into training (70%) and validation (30%). The validation subset is used for out-of-sample accruacy. 
+```{r}
+set.seed(1234)
+IDX = createDataPartition(y=training$classe,p=0.7,list=F)
+train_set = training[IDX,]
+valid_set = training[-IDX,]
+```
+
+Another preprocessing is needed to normalize the data. Again, we use the normalization results from the training subset to normalize the validation and the testing datasets. 
+
+```{r cache=TRUE}
+NormalizeData = preProcess(train_set[,-1],method=c("center","scale"))
+
+train_set[,2:53] = predict(NormalizeData,newdata=train_set[,-1])
+valid_set[,2:53] = predict(NormalizeData,newdata=valid_set[,-1])
+testing[,2:53]= predict(NormalizeData,newdata=testing[,-1])
+```
+
+## Building Models
+We are going to use three different models: linear discriminat analysis, boosted trees and random forests. For each of these models we are going to use cross validation where K=3 and each is repeated 3 times. 
+```{r}
+set.seed(123)
+#Setup cross validation controls
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+
+m_lda = train(classe~.,data=train_set,method="lda",trControl=control)
+m_gbm = train(classe~.,data=train_set,method="gbm",trControl=control)
+m_rf = train(classe~.,data=train_set,method="rf",trControl=control)
+```
+
+## Model Accuracy
+Since we used cross validation, then we have 10 different accuracy results for each model. To compare the results, we can plot them using a box-plot. The results show that Random Forests has the best total accuracy. 
+
+```{r}
+result=resamples(list(LDA=m_lda,RandomForests=m_rf,GBM=m_gbm))
+bwplot(result)
+```
+
+## Out-of-Sample Accuracy
+To test the accuracy using the validation subsample, we simply calculate the predicted values and print the confusion matrix. Again, the results show that Random Forests has the best accuracy. 
+
+```{r}
+lda_accuracy<- predict(m_lda, valid_set)
+print(confusionMatrix(lda_accuracy, valid_set$classe))
+gbm_accuracy<- predict(m_gbm, valid_set)
+print(confusionMatrix(gbm_accuracy, valid_set$classe))
+rf_accuracy<- predict(m_rf, valid_set)
+print(confusionMatrix(rf_accuracy, valid_set$classe))
+```
+
+## Predicting the testing dataset
+Finally, we use the best model (Random Forests) to predict the testing dataset
+```{r}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(predict(m_rf, testing))
+
+```
